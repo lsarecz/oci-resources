@@ -1,0 +1,72 @@
+#!/bin/bash
+
+counter=0
+usage="\n$(basename "$0") [-h] [-d] [-r REGION] [-p PROFILE] -- set whitelisted tag for No where it is not set
+\n
+\nwhere:
+\n  -h show this help text
+\n  -r set the region (default is all subscribed regions)
+\n  -p set the CLI profile to use
+\n  -d dry run - no commands executed
+\n"
+	
+while getopts 'hdp:r:' option; do
+  case "${option}"  in
+    h) echo -e $usage
+       exit
+       ;;
+    p) PROFILE=${OPTARG};;
+    r) REGION=${OPTARG};;
+    d) dryrun=TRUE
+  esac
+done
+
+if [ -z "$PROFILE" ]
+then
+  PROFILE="default"
+fi
+
+if [ -z "$REGION" ]
+then 
+  regList=($(oci iam region-subscription list --profile $PROFILE --query 'data[*]."region-name"' | sed s'/[\[",]//g' | sed -e 's/\]//g'))
+else
+  regList=$REGION
+fi
+
+#Print details of the activity and prompt for confirmation
+clear
+echo -e "\n========================================================="
+echo -e "\nRegions to be used: " && printf '%s,' "${regList[@]}"
+echo -e "\nProfile to be used: "$PROFILE
+echo ""
+read -p "Would you like to continue? " -n 1 -r
+echo 
+
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+  echo "Ok - here we go!"
+else
+  exit 1
+fi
+
+if [[ $dryrun == TRUE ]]
+then
+  echo "This is ONLY a test!"
+else  
+  AllcomputeID=($(oci search resource structured-search --region eu-frankfurt-1 --query-text "QUERY instance resources" --query 'data.items[*].identifier' | sed s'/[\[",]//g' | sed -e 's/\]//g'))
+  for c in "${AllcomputeID[@]}"; do
+    counter=$((counter+1))
+    Owner=($(oci search resource structured-search --region eu-frankfurt-1 --query-text "QUERY instance resources where identifier='$c'" --query 'data.items[*]."defined-tags".Monitoring.owner' | sed s'/[\[",]//g' | sed -e 's/\]//g'))
+    Whitelisted=($(oci search resource structured-search --region eu-frankfurt-1 --query-text "QUERY instance resources where identifier='$c'" --query 'data.items[*]."defined-tags".Monitoring.whitelisted' | sed s'/[\[",]//g' | sed -e 's/\]//g'))
+    Creation_date=($(oci search resource structured-search --region eu-frankfurt-1 --query-text "QUERY instance resources where identifier='$c'" --query 'data.items[*]."defined-tags".Monitoring.creation_date' | sed s'/[\[",]//g' | sed -e 's/\]//g'))
+    if $Whitelisted = ""
+    then
+      Whitelisted="No"
+    fi
+    oci compute instance update --force --instance-id $c --defined-tags "{\"Monitoring\": {\"whitelisted\": $Whitelisted, \"owner\": $Owner, \"creation_date\": $Creation_date}}"
+  done
+fi
+
+echo && echo "===================================================" && echo
+echo "Update complete.  A total of $counter resources were updated."
+echo 
